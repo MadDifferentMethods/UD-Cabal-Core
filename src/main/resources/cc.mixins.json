@@ -52,7 +52,11 @@
     "ManualJumper",
     "AJBS",
     "BBB.MixinClientLevelBiomeBlend",
-    "BBB.BBUnSlider"
+    "BBB.BBUnSlider",
+    "Fixes.Boat.BoatFix",
+    "Fixes.Boat.BoatUse",
+    "Fixes.Boat.BoatUnlanding",
+    "Fixes.Boat.Dismounter"
   ],
   "client": [
   ],
