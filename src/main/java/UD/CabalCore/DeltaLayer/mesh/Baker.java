@@ -28,7 +28,7 @@ public final class Baker {
         boolean slim = key.slim();
 
         return new MeshBundle(
-                bakeCuboid(image, PartDefinitions.HEAD),
+                bakeHead(image),
                 bakeCuboid(image, PartDefinitions.BODY),
                 bakeCuboid(image, PartDefinitions.leftArm(slim)),
                 bakeCuboid(image, PartDefinitions.rightArm(slim)),
@@ -43,9 +43,6 @@ public final class Baker {
     }
 
     private static float partScale(PartDefinition def) {
-        if (def == PartDefinitions.HEAD) {
-            return 1.75F;
-        }
         if (def == PartDefinitions.BODY) {
             return 1.00F;
         }
@@ -53,25 +50,286 @@ public final class Baker {
     }
 
     private static float faceScaleFrontBack(PartDefinition def) {
-        if (def == PartDefinitions.HEAD) {
-            return 1.10F;
-        }
         return 1.00F;
     }
 
     private static float faceScaleSide(PartDefinition def) {
-        if (def == PartDefinitions.HEAD) {
-            return 1.15F;
-        }
         return 0.85F;
     }
 
     private static float faceScaleTopBottom(PartDefinition def) {
-        if (def == PartDefinitions.HEAD) {
-            return 0.95F;
-        }
         return 0.70F;
     }
+
+    // =========================================================
+    // HEAD REWRITE #5 - Should work this time, maybe
+    // =========================================================
+
+    private static PartMesh bakeHead(NativeImage image) {
+        List<BakedQuad3D> quads = new ArrayList<>();
+
+        PartDefinition def = PartDefinitions.HEAD;
+
+        float inflate = def.inflate;
+
+        float minX = def.minX - inflate;
+        float maxX = def.maxX() + inflate;
+        float minY = def.minY - inflate;
+        float maxY = def.maxY() + inflate;
+        float minZ = def.minZ - inflate;
+        float maxZ = def.maxZ() + inflate;
+
+        float frontBackDepth = BASE_DEPTH * 1.90F;
+        float sideDepth = BASE_DEPTH * 1.75F;
+        float topDepth = BASE_DEPTH * 2.00F;
+        float bottomDepth = BASE_DEPTH * 1.20F;
+
+        boolean[][] front = readFace(image, 40, 8);
+        boolean[][] back = readFace(image, 56, 8);
+        boolean[][] left = readFace(image, 32, 8);
+        boolean[][] right = readFace(image, 48, 8);
+        boolean[][] top = readFace(image, 40, 0);
+        boolean[][] bottom = readFace(image, 48, 0);
+
+        emitHeadFront(quads, front, 40, 8, minX, maxX, minY, maxY, minZ, frontBackDepth);
+        emitHeadBack(quads, back, 56, 8, minX, maxX, minY, maxY, maxZ, frontBackDepth);
+        emitHeadLeft(quads, left, 32, 8, minX, minY, maxY, minZ, maxZ, sideDepth);
+        emitHeadRight(quads, right, 48, 8, maxX, minY, maxY, minZ, maxZ, sideDepth);
+        emitHeadTop(quads, top, 40, 0, minX, maxX, minY, minZ, maxZ, topDepth);
+        emitHeadBottom(quads, bottom, 48, 0, minX, maxX, maxY, minZ, maxZ, bottomDepth);
+
+        return new PartMesh(quads);
+    }
+
+    private static boolean[][] readFace(NativeImage image, int u0, int v0) {
+        boolean[][] out = new boolean[8][8];
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                out[y][x] = opaque(image, u0 + x, v0 + y);
+            }
+        }
+        return out;
+    }
+
+    private static void emitHeadFront(
+            List<BakedQuad3D> quads,
+            boolean[][] face,
+            int u0, int v0,
+            float minX, float maxX, float minY, float maxY,
+            float zShell, float depth
+    ) {
+        float inner = depth * 0.35F;
+        float outer = depth * 0.65F;
+        float zOuter = zShell - outer;
+        float zInner = zShell + inner;
+
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                if (!face[y][x]) continue;
+
+                boolean leftOpen   = x == 0 || !face[y][x - 1];
+                boolean rightOpen  = x == 7 || !face[y][x + 1];
+                boolean topOpen    = y == 0 || !face[y - 1][x];
+                boolean bottomOpen = y == 7 || !face[y + 1][x];
+
+                float x0 = lerp(x, 0, 8, minX, maxX);
+                float x1 = lerp(x + 1, 0, 8, minX, maxX);
+                float y0 = lerp(y, 0, 8, minY, maxY);
+                float y1 = lerp(y + 1, 0, 8, minY, maxY);
+
+                addQuadFront(quads, x0, x1, y0, y1, zOuter, u0 + x, v0 + y);
+
+                if (leftOpen) addQuadLeft(quads, x0, y0, y1, zOuter, zInner, u0 + x, v0 + y);
+                if (rightOpen) addQuadRight(quads, x1, y0, y1, zOuter, zInner, u0 + x, v0 + y);
+                if (topOpen) addQuadTop(quads, x0, x1, y0, zOuter, zInner, u0 + x, v0 + y);
+                if (bottomOpen) addQuadBottom(quads, x0, x1, y1, zOuter, zInner, u0 + x, v0 + y);
+            }
+        }
+    }
+
+    private static void emitHeadBack(
+            List<BakedQuad3D> quads,
+            boolean[][] face,
+            int u0, int v0,
+            float minX, float maxX, float minY, float maxY,
+            float zShell, float depth
+    ) {
+        float inner = depth * 0.35F;
+        float outer = depth * 0.65F;
+        float zInner = zShell - inner;
+        float zOuter = zShell + outer;
+
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                if (!face[y][x]) continue;
+
+                boolean leftOpen   = x == 0 || !face[y][x - 1];
+                boolean rightOpen  = x == 7 || !face[y][x + 1];
+                boolean topOpen    = y == 0 || !face[y - 1][x];
+                boolean bottomOpen = y == 7 || !face[y + 1][x];
+
+                float x0 = lerp(x, 0, 8, maxX, minX);
+                float x1 = lerp(x + 1, 0, 8, maxX, minX);
+                float y0 = lerp(y, 0, 8, minY, maxY);
+                float y1 = lerp(y + 1, 0, 8, minY, maxY);
+
+                addQuadBack(quads, x0, x1, y0, y1, zOuter, u0 + x, v0 + y);
+
+                if (leftOpen) addQuadRight(quads, x0, y0, y1, zInner, zOuter, u0 + x, v0 + y);
+                if (rightOpen) addQuadLeft(quads, x1, y0, y1, zInner, zOuter, u0 + x, v0 + y);
+                if (topOpen) addQuadTop(quads, x0, x1, y0, zInner, zOuter, u0 + x, v0 + y);
+                if (bottomOpen) addQuadBottom(quads, x0, x1, y1, zInner, zOuter, u0 + x, v0 + y);
+            }
+        }
+    }
+
+    private static void emitHeadLeft(
+            List<BakedQuad3D> quads,
+            boolean[][] face,
+            int u0, int v0,
+            float xShell, float minY, float maxY,
+            float minZ, float maxZ, float depth
+    ) {
+        float inner = depth * 0.35F;
+        float outer = depth * 0.65F;
+        float xOuter = xShell - outer;
+        float xInner = xShell + inner;
+
+        for (int y = 0; y < 8; y++) {
+            for (int z = 0; z < 8; z++) {
+                if (!face[y][z]) continue;
+
+                boolean frontOpen  = z == 0 || !face[y][z - 1];
+                boolean backOpen   = z == 7 || !face[y][z + 1];
+                boolean topOpen    = y == 0 || !face[y - 1][z];
+                boolean bottomOpen = y == 7 || !face[y + 1][z];
+
+                float z0 = lerp(z, 0, 8, maxZ, minZ);
+                float z1 = lerp(z + 1, 0, 8, maxZ, minZ);
+                float y0 = lerp(y, 0, 8, minY, maxY);
+                float y1 = lerp(y + 1, 0, 8, minY, maxY);
+
+                addQuadLeft(quads, xOuter, y0, y1, z0, z1, u0 + z, v0 + y);
+
+                if (frontOpen) addQuadFront(quads, xOuter, xInner, y0, y1, z0, u0 + z, v0 + y);
+                if (backOpen) addQuadBack(quads, xOuter, xInner, y0, y1, z1, u0 + z, v0 + y);
+                if (topOpen) addQuadTopX(quads, xOuter, xInner, y0, z0, z1, u0 + z, v0 + y);
+                if (bottomOpen) addQuadBottomX(quads, xOuter, xInner, y1, z0, z1, u0 + z, v0 + y);
+            }
+        }
+    }
+
+    private static void emitHeadRight(
+            List<BakedQuad3D> quads,
+            boolean[][] face,
+            int u0, int v0,
+            float xShell, float minY, float maxY,
+            float minZ, float maxZ, float depth
+    ) {
+        float inner = depth * 0.35F;
+        float outer = depth * 0.65F;
+        float xInner = xShell - inner;
+        float xOuter = xShell + outer;
+
+        for (int y = 0; y < 8; y++) {
+            for (int z = 0; z < 8; z++) {
+                if (!face[y][z]) continue;
+
+                boolean frontOpen  = z == 0 || !face[y][z - 1];
+                boolean backOpen   = z == 7 || !face[y][z + 1];
+                boolean topOpen    = y == 0 || !face[y - 1][z];
+                boolean bottomOpen = y == 7 || !face[y + 1][z];
+
+                float z0 = lerp(z, 0, 8, minZ, maxZ);
+                float z1 = lerp(z + 1, 0, 8, minZ, maxZ);
+                float y0 = lerp(y, 0, 8, minY, maxY);
+                float y1 = lerp(y + 1, 0, 8, minY, maxY);
+
+                addQuadRight(quads, xOuter, y0, y1, z0, z1, u0 + z, v0 + y);
+
+                if (frontOpen) addQuadFront(quads, xInner, xOuter, y0, y1, z0, u0 + z, v0 + y);
+                if (backOpen) addQuadBack(quads, xInner, xOuter, y0, y1, z1, u0 + z, v0 + y);
+                if (topOpen) addQuadTopX(quads, xInner, xOuter, y0, z0, z1, u0 + z, v0 + y);
+                if (bottomOpen) addQuadBottomX(quads, xInner, xOuter, y1, z0, z1, u0 + z, v0 + y);
+            }
+        }
+    }
+
+    private static void emitHeadTop(
+            List<BakedQuad3D> quads,
+            boolean[][] face,
+            int u0, int v0,
+            float minX, float maxX, float yShell,
+            float minZ, float maxZ, float depth
+    ) {
+        float inner = depth * 0.35F;
+        float outer = depth * 0.70F;
+        float yOuter = yShell - outer;
+        float yInner = yShell + inner;
+
+        for (int z = 0; z < 8; z++) {
+            for (int x = 0; x < 8; x++) {
+                if (!face[z][x]) continue;
+
+                boolean leftOpen  = x == 0 || !face[z][x - 1];
+                boolean rightOpen = x == 7 || !face[z][x + 1];
+                boolean frontOpen = z == 7 || !face[z + 1][x];
+                boolean backOpen  = z == 0 || !face[z - 1][x];
+
+                float x0 = lerp(x, 0, 8, minX, maxX);
+                float x1 = lerp(x + 1, 0, 8, minX, maxX);
+                float z0 = lerp(z, 0, 8, maxZ, minZ);
+                float z1 = lerp(z + 1, 0, 8, maxZ, minZ);
+
+                addQuadTop(quads, x0, x1, yOuter, z0, z1, u0 + x, v0 + z);
+
+                if (leftOpen) addQuadLeft(quads, x0, yOuter, yInner, z0, z1, u0 + x, v0 + z);
+                if (rightOpen) addQuadRight(quads, x1, yOuter, yInner, z0, z1, u0 + x, v0 + z);
+                if (frontOpen) addQuadFrontZ(quads, x0, x1, yOuter, yInner, z0, u0 + x, v0 + z);
+                if (backOpen) addQuadBackZ(quads, x0, x1, yOuter, yInner, z1, u0 + x, v0 + z);
+            }
+        }
+    }
+
+    private static void emitHeadBottom(
+            List<BakedQuad3D> quads,
+            boolean[][] face,
+            int u0, int v0,
+            float minX, float maxX, float yShell,
+            float minZ, float maxZ, float depth
+    ) {
+        float inner = depth * 0.35F;
+        float outer = depth * 0.65F;
+        float yInner = yShell - inner;
+        float yOuter = yShell + outer;
+
+        for (int z = 0; z < 8; z++) {
+            for (int x = 0; x < 8; x++) {
+                if (!face[z][x]) continue;
+
+                boolean leftOpen  = x == 0 || !face[z][x - 1];
+                boolean rightOpen = x == 7 || !face[z][x + 1];
+                boolean frontOpen = z == 0 || !face[z - 1][x];
+                boolean backOpen  = z == 7 || !face[z + 1][x];
+
+                float x0 = lerp(x, 0, 8, minX, maxX);
+                float x1 = lerp(x + 1, 0, 8, minX, maxX);
+                float z0 = lerp(z, 0, 8, maxZ, minZ);
+                float z1 = lerp(z + 1, 0, 8, maxZ, minZ);
+
+                addQuadBottom(quads, x0, x1, yOuter, z0, z1, u0 + x, v0 + z);
+
+                if (leftOpen) addQuadLeft(quads, x0, yInner, yOuter, z0, z1, u0 + x, v0 + z);
+                if (rightOpen) addQuadRight(quads, x1, yInner, yOuter, z0, z1, u0 + x, v0 + z);
+                if (frontOpen) addQuadFrontZ(quads, x0, x1, yInner, yOuter, z0, u0 + x, v0 + z);
+                if (backOpen) addQuadBackZ(quads, x0, x1, yInner, yOuter, z1, u0 + x, v0 + z);
+            }
+        }
+    }
+
+    // =========================================================
+    // ORIGINAL IDEA BAKER FOR BODY / ARMS / LEGS
+    // =========================================================
 
     private static PartMesh bakeCuboid(NativeImage image, PartDefinition def) {
         List<BakedQuad3D> quads = new ArrayList<>();
@@ -123,9 +381,7 @@ public final class Baker {
                 float y0 = lerp(py,     0, h, minY, maxY);
                 float y1 = lerp(py + 1, 0, h, minY, maxY);
 
-                if (def == PartDefinitions.HEAD && py == 0) {
-                    y0 -= 0.60F;
-                } else if (py == 0) {
+                if (py == 0) {
                     y0 -= 0.0005F;
                 }
 
@@ -169,9 +425,7 @@ public final class Baker {
                 float y0 = lerp(py,     0, h, minY, maxY);
                 float y1 = lerp(py + 1, 0, h, minY, maxY);
 
-                if (def == PartDefinitions.HEAD && py == 0) {
-                    y0 -= 0.60F;
-                } else if (py == 0) {
+                if (py == 0) {
                     y0 -= 0.0005F;
                 }
 
@@ -215,17 +469,6 @@ public final class Baker {
                 float y0 = lerp(py,     0, h, minY, maxY);
                 float y1 = lerp(py + 1, 0, h, minY, maxY);
 
-                if (def == PartDefinitions.HEAD && py == 0) {
-                    float lift = 0.60F;
-
-                    // left face: frontmost column is the last one
-                    if (pz == d - 1) {
-                        lift = 0.18F;
-                    }
-
-                    y0 -= lift;
-                }
-
                 addQuadLeftFace(quads, xOuter, y0, y1, z0, z1, u0 + pz, v0 + py);
 
                 if (frontOpen) {
@@ -265,17 +508,6 @@ public final class Baker {
                 float z1 = lerp(pz + 1, 0, d, minZ, maxZ);
                 float y0 = lerp(py,     0, h, minY, maxY);
                 float y1 = lerp(py + 1, 0, h, minY, maxY);
-
-                if (def == PartDefinitions.HEAD && py == 0) {
-                    float lift = 0.60F;
-
-                    // right face: frontmost column is the first one
-                    if (pz == 0) {
-                        lift = 0.18F;
-                    }
-
-                    y0 -= lift;
-                }
 
                 addQuadRightFace(quads, xOuter, y0, y1, z0, z1, u0 + pz, v0 + py);
 
