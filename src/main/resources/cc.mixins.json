@@ -56,7 +56,10 @@
     "Fixes.Boat.BoatFix",
     "Fixes.Boat.BoatUse",
     "Fixes.Boat.BoatUnlanding",
-    "Fixes.Boat.Dismounter"
+    "Fixes.Boat.Dismounter",
+    "DeltaLayer.DeltaLayerExposer",
+    "DeltaLayer.VLayerHider",
+    "DeltaLayer.VLayerAccessor"
   ],
   "client": [
   ],
