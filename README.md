@@ -1,0 +1,2 @@
+Cabal Core is a Forge 1.19.2 client overhaul mod that strips, disables, and rewires parts of the vanilla and Forge client while introducing targeted optimizations like a custom biome blending system.
+Instead of focusing only on rewriting the most obviously inefficient vanilla systems, this project takes a full-measure approach: removing redundancy, cutting unnecessary features, and trimming hidden overhead so that many small gains stack into a noticeably cleaner and more efficient client.

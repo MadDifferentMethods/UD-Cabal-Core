@@ -74,12 +74,35 @@ public final class LayerRender<T extends AbstractClientPlayer, M extends PlayerM
         VertexConsumer consumer = buffer.getBuffer(RenderType.entityTranslucent(player.getSkinTextureLocation()));
         PlayerModel<T> model = this.getParentModel();
 
-        renderBoundPart(poseStack, consumer, packedLight, model.head, mesh.head);
-        renderBoundPart(poseStack, consumer, packedLight, model.body, mesh.body);
-        renderBoundPart(poseStack, consumer, packedLight, model.leftArm, mesh.leftArm);
-        renderBoundPart(poseStack, consumer, packedLight, model.rightArm, mesh.rightArm);
-        renderBoundPart(poseStack, consumer, packedLight, model.leftLeg, mesh.leftLeg);
-        renderBoundPart(poseStack, consumer, packedLight, model.rightLeg, mesh.rightLeg);
+        boolean oldHat = model.hat.visible;
+        boolean oldJacket = model.jacket.visible;
+        boolean oldLeftSleeve = model.leftSleeve.visible;
+        boolean oldRightSleeve = model.rightSleeve.visible;
+        boolean oldLeftPants = model.leftPants.visible;
+        boolean oldRightPants = model.rightPants.visible;
+
+        model.hat.visible = false;
+        model.jacket.visible = false;
+        model.leftSleeve.visible = false;
+        model.rightSleeve.visible = false;
+        model.leftPants.visible = false;
+        model.rightPants.visible = false;
+
+        try {
+            renderBoundPart(poseStack, consumer, packedLight, model.head, mesh.head);
+            renderBoundPart(poseStack, consumer, packedLight, model.body, mesh.body);
+            renderBoundPart(poseStack, consumer, packedLight, model.leftArm, mesh.leftArm);
+            renderBoundPart(poseStack, consumer, packedLight, model.rightArm, mesh.rightArm);
+            renderBoundPart(poseStack, consumer, packedLight, model.leftLeg, mesh.leftLeg);
+            renderBoundPart(poseStack, consumer, packedLight, model.rightLeg, mesh.rightLeg);
+        } finally {
+            model.hat.visible = oldHat;
+            model.jacket.visible = oldJacket;
+            model.leftSleeve.visible = oldLeftSleeve;
+            model.rightSleeve.visible = oldRightSleeve;
+            model.leftPants.visible = oldLeftPants;
+            model.rightPants.visible = oldRightPants;
+        }
     }
 
     private void renderBoundPart(
