@@ -66,22 +66,28 @@ public final class Baker {
 // =========================================================
 
     private static final float HEAD_FRONT_DEPTH   = 0.5f;
-    private static final float HEAD_SIDE_DEPTH    = 0.5f;
-    private static final float HEAD_BACK_DEPTH    = 0.8f;
-    private static final float HEAD_TOP_DEPTH     = 0.5f;
-    private static final float HEAD_BOTTOM_DEPTH  = 0.5f;
-
     private static final float HEAD_FRONT_UP    = 0.08f;
     private static final float HEAD_FRONT_DOWN  = 0.08f;
+    private static final float HEAD_FRONT_WIDTH_EXTRA  = 0.10f;
+    private static final float HEAD_FRONT_HEIGHT_EXTRA = 0.06f;
+    private static final float HEAD_FRONT_VERTICAL_EXTRA= 0.50f;
 
+    private static final float HEAD_SIDE_DEPTH    = 0.5f;
     private static final float HEAD_SIDE_UP     = 0.12f;
     private static final float HEAD_SIDE_DOWN   = 0.08f;
 
+    private static final float HEAD_BACK_DEPTH    = 0.8f;
     private static final float HEAD_BACK_UP     = 0.08f;
     private static final float HEAD_BACK_DOWN   = 0.08f;
+    private static final float HEAD_BACK_WIDTH_EXTRA   = 0.10f;
+    private static final float HEAD_BACK_HEIGHT_EXTRA  = 0.06f;
+    private static final float HEAD_BACK_VERTICAL_EXTRA = 0.50f;
 
-    private static final float HEAD_FRONT_WIDTH_EXTRA  = 0.10f;
-    private static final float HEAD_FRONT_HEIGHT_EXTRA = 0.06f;
+    private static final float HEAD_TOP_DEPTH     = 0.5f;
+    private static final float HEAD_TOP_WIDTH_EXTRA    = 0.10f;
+    private static final float HEAD_TOP_DEPTH_EXTRA    = 0.10f;
+
+    private static final float HEAD_BOTTOM_DEPTH  = 0.5f;
 
     private static final float EPS = 0.0001f;
 
@@ -105,8 +111,10 @@ public final class Baker {
 
         float frontMinX = x0 - HEAD_SIDE_DEPTH - HEAD_FRONT_WIDTH_EXTRA;
         float frontMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_FRONT_WIDTH_EXTRA;
-        float frontMinY = y0 - HEAD_FRONT_UP - HEAD_FRONT_HEIGHT_EXTRA;
-        float frontMaxY = y1 + HEAD_FRONT_DOWN + HEAD_FRONT_HEIGHT_EXTRA;
+
+// Push the whole front projection slightly farther vertically.
+        float frontMinY = y0 - HEAD_FRONT_UP - HEAD_FRONT_HEIGHT_EXTRA - HEAD_FRONT_VERTICAL_EXTRA;
+        float frontMaxY = y1 + HEAD_FRONT_DOWN + HEAD_FRONT_HEIGHT_EXTRA + HEAD_FRONT_VERTICAL_EXTRA;
 
         float frontPx = (frontMaxX - frontMinX) / 8.0f;
         float frontPy = (frontMaxY - frontMinY) / 8.0f;
@@ -130,15 +138,24 @@ public final class Baker {
             }
         }
 
-        // BACK: uv 56,8
+        float backMinX = x0 - HEAD_SIDE_DEPTH - HEAD_BACK_WIDTH_EXTRA;
+        float backMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_BACK_WIDTH_EXTRA;
+
+        float backMinY = y0 - HEAD_BACK_UP - HEAD_BACK_HEIGHT_EXTRA - HEAD_BACK_VERTICAL_EXTRA;
+        float backMaxY = y1 + HEAD_BACK_DOWN + HEAD_BACK_HEIGHT_EXTRA + HEAD_BACK_VERTICAL_EXTRA;
+
+        float backPx = (backMaxX - backMinX) / 8.0f;
+        float backPy = (backMaxY - backMinY) / 8.0f;
+
+// BACK: uv 56,8
         for (int v = 0; v < 8; v++) {
             for (int u = 0; u < 8; u++) {
                 if (!opaque(skin, 56 + u, 8 + v)) continue;
 
-                float ax0 = x1 - (u + 1) * px;
-                float ax1 = x1 - u * px;
-                float ay0 = y0 - HEAD_BACK_UP + v * py;
-                float ay1 = ay0 + py;
+                float ax0 = backMaxX - (u + 1) * backPx;
+                float ax1 = backMaxX - u * backPx;
+                float ay0 = backMinY + v * backPy;
+                float ay1 = ay0 + backPy;
 
                 boxes.add(new HeadBox(
                         ax0, ax1,
@@ -187,15 +204,24 @@ public final class Baker {
             }
         }
 
-        // TOP: uv 40,0
+        float topMinX = x0 - HEAD_SIDE_DEPTH - HEAD_TOP_WIDTH_EXTRA;
+        float topMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_TOP_WIDTH_EXTRA;
+
+        float topMinZ = z0 - HEAD_FRONT_DEPTH - HEAD_TOP_DEPTH_EXTRA;
+        float topMaxZ = z1 + HEAD_BACK_DEPTH + HEAD_TOP_DEPTH_EXTRA;
+
+        float topPx = (topMaxX - topMinX) / 8.0f;
+        float topPz = (topMaxZ - topMinZ) / 8.0f;
+
+// TOP: uv 40,0
         for (int v = 0; v < 8; v++) {
             for (int u = 0; u < 8; u++) {
                 if (!opaque(skin, 40 + u, v)) continue;
 
-                float ax0 = x0 + u * px;
-                float ax1 = ax0 + px;
-                float az0 = z1 - (v + 1) * pz;
-                float az1 = z1 - v * pz;
+                float ax0 = topMinX + u * topPx;
+                float ax1 = ax0 + topPx;
+                float az0 = topMaxZ - (v + 1) * topPz;
+                float az1 = topMaxZ - v * topPz;
 
                 boxes.add(new HeadBox(
                         ax0, ax1,
