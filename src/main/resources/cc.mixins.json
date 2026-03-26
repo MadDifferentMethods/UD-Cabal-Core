@@ -57,9 +57,14 @@
     "Fixes.Boat.BoatUse",
     "Fixes.Boat.BoatUnlanding",
     "Fixes.Boat.Dismounter",
-    "DeltaLayer.DeltaLayerExposer",
-    "DeltaLayer.VLayerHider",
-    "DeltaLayer.VLayerAccessor"
+    "Opt.toast.ToastObliterator",
+    "Opt.Fov.FovZeroBypass",
+    "Opt.Tutoriel.TutNull",
+    "Opt.Particles.ParticleVoid",
+    "Opt.Debug.GameTest.GameTestNull",
+    "Opt.Debug.GameEvent.GameEventNull",
+    "Opt.Debug.Bee.BeeNull",
+    "Opt.Debug.Brain.BrainNull"
   ],
   "client": [
   ],

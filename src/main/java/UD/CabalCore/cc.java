@@ -12,8 +12,11 @@ public class cc {
 
     @SuppressWarnings("removal")
     public cc() {
-        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, Config.SPEC);
-        DeltaLayer.init();
-        System.out.println("[DeltaLayer] init()");
+
     }
 }
+
+
+////Deactivated
+//ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, Config.SPEC);
+//        DeltaLayer.init();;
