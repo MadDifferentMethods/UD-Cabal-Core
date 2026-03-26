@@ -3,7 +3,9 @@ package UD.CabalCore.DeltaLayer.mesh;
 import com.mojang.blaze3d.platform.NativeImage;
 import UD.CabalCore.DeltaLayer.cache.ImgCache;
 import UD.CabalCore.DeltaLayer.cache.MeshKey;
-
+import java.util.Map;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -61,41 +63,191 @@ public final class Baker {
         return 0.70F;
     }
 
-    // =========================================================
-// HEAD - 9th Rewrite with fresh set of eyes....
+// =========================================================
+// HEAD - 11th rewrite occupancy-grid try
 // =========================================================
 
-    private static final float HEAD_FRONT_DEPTH   = 0.5f;
-    private static final float HEAD_FRONT_UP    = 0.08f;
-    private static final float HEAD_FRONT_DOWN  = 0.08f;
-    private static final float HEAD_FRONT_WIDTH_EXTRA  = 0.10f;
+    // These are the visually proven front values you already found.
+    private static final float HEAD_FRONT_DEPTH = 0.5f;
+    private static final float HEAD_FRONT_UP = 0.08f;
+    private static final float HEAD_FRONT_DOWN = 0.08f;
+    private static final float HEAD_FRONT_WIDTH_EXTRA = 0.10f;
     private static final float HEAD_FRONT_HEIGHT_EXTRA = 0.06f;
-    private static final float HEAD_FRONT_VERTICAL_EXTRA= 0.50f;
+    private static final float HEAD_FRONT_VERTICAL_EXTRA = 0.50f;
 
-    private static final float HEAD_SIDE_DEPTH    = 0.5f;
-    private static final float HEAD_SIDE_UP     = 0.12f;
-    private static final float HEAD_SIDE_DOWN   = 0.08f;
-
-    private static final float HEAD_BACK_DEPTH    = 0.8f;
-    private static final float HEAD_BACK_UP     = 0.08f;
-    private static final float HEAD_BACK_DOWN   = 0.08f;
-    private static final float HEAD_BACK_WIDTH_EXTRA   = 0.10f;
-    private static final float HEAD_BACK_HEIGHT_EXTRA  = 0.06f;
+    // Keep back matched to front envelope for now.
+    private static final float HEAD_BACK_DEPTH = 0.5f;
+    private static final float HEAD_BACK_UP = 0.08f;
+    private static final float HEAD_BACK_DOWN = 0.08f;
+    private static final float HEAD_BACK_WIDTH_EXTRA = 0.10f;
+    private static final float HEAD_BACK_HEIGHT_EXTRA = 0.06f;
     private static final float HEAD_BACK_VERTICAL_EXTRA = 0.50f;
 
-    private static final float HEAD_TOP_DEPTH     = 0.5f;
-    private static final float HEAD_TOP_WIDTH_EXTRA    = 0.10f;
-    private static final float HEAD_TOP_DEPTH_EXTRA    = 0.10f;
+    // Side shell thickness.
+    private static final float HEAD_SIDE_DEPTH = 0.5f;
 
-    private static final float HEAD_BOTTOM_DEPTH  = 0.5f;
+    // Top / bottom thickness.
+    private static final float HEAD_TOP_DEPTH = 0.5f;
+    private static final float HEAD_BOTTOM_DEPTH = 0.5f;
 
-    private static final float EPS = 0.0001f;
+    private static final float HEAD_EPS = 0.0005f;
+    private static final float HEAD_SEAM_EPS = 0.0015f;
+
+    // Optional side insets if you want to mimic the slight 3DSL asymmetry later.
+// Keep at 0 for now until needed.
+    private static final float HEAD_LEFT_INSET = 0.0f;
+    private static final float HEAD_RIGHT_INSET = 0.0f;
+
+    private enum Dir {
+        NEG_X, POS_X,
+        NEG_Y, POS_Y,
+        NEG_Z, POS_Z
+    }
+
+    private static final class CellKey {
+        final int x, y, z;
+
+        CellKey(int x, int y, int z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof CellKey other)) return false;
+            return x == other.x && y == other.y && z == other.z;
+        }
+
+        @Override
+        public int hashCode() {
+            int h = x;
+            h = 31 * h + y;
+            h = 31 * h + z;
+            return h;
+        }
+    }
+
+    private static final class FaceSample {
+        final int u, v;
+
+        FaceSample(int u, int v) {
+            this.u = u;
+            this.v = v;
+        }
+    }
+
+    private static final class ShellCell {
+        final EnumMap<Dir, FaceSample> outward = new EnumMap<>(Dir.class);
+    }
 
     private static PartMesh bakeHead(NativeImage skin) {
         PartDefinition part = PartDefinitions.HEAD;
 
-        // IMPORTANT:
-        // Anchor to the real head cube so the 3D layer touches the head.
+        Map<CellKey, ShellCell> shell = new HashMap<>(256);
+
+        collectFront(shell, skin);
+        collectBack(shell, skin);
+        collectLeft(shell, skin);
+        collectRight(shell, skin);
+        collectTop(shell, skin);
+        collectBottom(shell, skin);
+
+        List<BakedQuad3D> quads = new ArrayList<>(256);
+
+        for (Map.Entry<CellKey, ShellCell> entry : shell.entrySet()) {
+            CellKey key = entry.getKey();
+            ShellCell cell = entry.getValue();
+
+            for (Map.Entry<Dir, FaceSample> face : cell.outward.entrySet()) {
+                emitOwnedSlab(quads, shell, part, key, face.getKey(), face.getValue());
+            }
+        }
+
+        emitHeadSeamStrips(quads, shell, part);
+        emitHeadCornerBoxes(quads, shell, part);
+
+        return new PartMesh(quads);
+
+    }
+
+    private static void collectFront(Map<CellKey, ShellCell> shell, NativeImage skin) {
+        for (int v = 0; v < 8; v++) {
+            for (int u = 0; u < 8; u++) {
+                if (!opaque(skin, 40 + u, 8 + v)) continue;
+                put(shell, u, v, -1, Dir.NEG_Z, 40 + u, 8 + v);
+
+            }
+        }
+    }
+
+    private static boolean hasFace(Map<CellKey, ShellCell> shell, int x, int y, int z, Dir dir) {
+        ShellCell cell = shell.get(new CellKey(x, y, z));
+        return cell != null && cell.outward.containsKey(dir);
+    }
+
+    private static void collectBack(Map<CellKey, ShellCell> shell, NativeImage skin) {
+        for (int v = 0; v < 8; v++) {
+            for (int u = 0; u < 8; u++) {
+                if (!opaque(skin, 56 + u, 8 + v)) continue;
+                put(shell, 7 - u, v, 8, Dir.POS_Z, 56 + u, 8 + v);
+            }
+        }
+    }
+
+    private static void collectLeft(Map<CellKey, ShellCell> shell, NativeImage skin) {
+        for (int v = 0; v < 8; v++) {
+            for (int u = 0; u < 8; u++) {
+                if (!opaque(skin, 32 + u, 8 + v)) continue;
+                put(shell, -1, v, 7 - u, Dir.NEG_X, 32 + u, 8 + v);
+            }
+        }
+    }
+
+    private static void collectRight(Map<CellKey, ShellCell> shell, NativeImage skin) {
+        for (int v = 0; v < 8; v++) {
+            for (int u = 0; u < 8; u++) {
+                if (!opaque(skin, 48 + u, 8 + v)) continue;
+                put(shell, 8, v, u, Dir.POS_X, 48 + u, 8 + v);
+            }
+        }
+    }
+
+    private static void collectTop(Map<CellKey, ShellCell> shell, NativeImage skin) {
+        for (int v = 0; v < 8; v++) {
+            for (int u = 0; u < 8; u++) {
+                if (!opaque(skin, 40 + u, v)) continue;
+                put(shell, u, -1, 7 - v, Dir.NEG_Y, 40 + u, v);
+            }
+        }
+    }
+
+    private static void collectBottom(Map<CellKey, ShellCell> shell, NativeImage skin) {
+        for (int v = 0; v < 8; v++) {
+            for (int u = 0; u < 8; u++) {
+                if (!opaque(skin, 48 + u, v)) continue;
+                put(shell, u, 8, v, Dir.POS_Y, 48 + u, v);
+            }
+        }
+    }
+
+    private static void put(Map<CellKey, ShellCell> shell,
+                            int x, int y, int z,
+                            Dir dir,
+                            int u, int v) {
+        CellKey key = new CellKey(x, y, z);
+        ShellCell cell = shell.computeIfAbsent(key, k -> new ShellCell());
+        cell.outward.put(dir, new FaceSample(u, v));
+    }
+
+    private static void emitOwnedSlab(List<BakedQuad3D> quads,
+                                      Map<CellKey, ShellCell> shell,
+                                      PartDefinition part,
+                                      CellKey key,
+                                      Dir dir,
+                                      FaceSample uv) {
+
         float x0 = part.minX;
         float x1 = part.maxX();
         float y0 = part.minY;
@@ -107,439 +259,751 @@ public final class Baker {
         float py = (y1 - y0) / 8.0f;
         float pz = (z1 - z0) / 8.0f;
 
-        List<HeadBox> boxes = new ArrayList<>(512);
-
         float frontMinX = x0 - HEAD_SIDE_DEPTH - HEAD_FRONT_WIDTH_EXTRA;
         float frontMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_FRONT_WIDTH_EXTRA;
-
-// Push the whole front projection slightly farther vertically.
         float frontMinY = y0 - HEAD_FRONT_UP - HEAD_FRONT_HEIGHT_EXTRA - HEAD_FRONT_VERTICAL_EXTRA;
         float frontMaxY = y1 + HEAD_FRONT_DOWN + HEAD_FRONT_HEIGHT_EXTRA + HEAD_FRONT_VERTICAL_EXTRA;
-
         float frontPx = (frontMaxX - frontMinX) / 8.0f;
         float frontPy = (frontMaxY - frontMinY) / 8.0f;
 
-// FRONT: uv 40,8
-        for (int v = 0; v < 8; v++) {
-            for (int u = 0; u < 8; u++) {
-                if (!opaque(skin, 40 + u, 8 + v)) continue;
-
-                float ax0 = frontMinX + u * frontPx;
-                float ax1 = ax0 + frontPx;
-                float ay0 = frontMinY + v * frontPy;
-                float ay1 = ay0 + frontPy;
-
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        ay0, ay1,
-                        z0 - HEAD_FRONT_DEPTH, z0,
-                        40 + u, 8 + v
-                ));
-            }
-        }
-
         float backMinX = x0 - HEAD_SIDE_DEPTH - HEAD_BACK_WIDTH_EXTRA;
         float backMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_BACK_WIDTH_EXTRA;
-
         float backMinY = y0 - HEAD_BACK_UP - HEAD_BACK_HEIGHT_EXTRA - HEAD_BACK_VERTICAL_EXTRA;
         float backMaxY = y1 + HEAD_BACK_DOWN + HEAD_BACK_HEIGHT_EXTRA + HEAD_BACK_VERTICAL_EXTRA;
-
         float backPx = (backMaxX - backMinX) / 8.0f;
         float backPy = (backMaxY - backMinY) / 8.0f;
 
-// BACK: uv 56,8
-        for (int v = 0; v < 8; v++) {
-            for (int u = 0; u < 8; u++) {
-                if (!opaque(skin, 56 + u, 8 + v)) continue;
+        float sideMinY = frontMinY;
+        float sideMaxY = frontMaxY;
+        float sidePy = (sideMaxY - sideMinY) / 8.0f;
 
-                float ax0 = backMaxX - (u + 1) * backPx;
-                float ax1 = backMaxX - u * backPx;
-                float ay0 = backMinY + v * backPy;
+        float sideMinZ = z0 - HEAD_FRONT_DEPTH;
+        float sideMaxZ = z1 + HEAD_BACK_DEPTH;
+        float sidePz = (sideMaxZ - sideMinZ) / 8.0f;
+
+        float outerMinX = x0 - HEAD_SIDE_DEPTH - HEAD_FRONT_WIDTH_EXTRA;
+        float outerMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_FRONT_WIDTH_EXTRA;
+        float outerMinZ = z0 - HEAD_FRONT_DEPTH;
+        float outerMaxZ = z1 + HEAD_BACK_DEPTH;
+
+        float topPx = (outerMaxX - outerMinX) / 8.0f;
+        float topPz = (outerMaxZ - outerMinZ) / 8.0f;
+
+        switch (dir) {
+            case NEG_Z -> {
+                int cx = key.x;
+                int cy = key.y;
+
+                float ax0 = frontMinX + cx * frontPx;
+                float ax1 = ax0 + frontPx;
+                float ay0 = frontMinY + cy * frontPy;
+                float ay1 = ay0 + frontPy;
+                float az0 = z0 - HEAD_FRONT_DEPTH;
+                float az1 = z0 - HEAD_EPS;
+
+                addQuadFront(quads, ax0, ax1, ay0, ay1, az0, uv.u, uv.v);
+
+                if (!hasFace(shell, cx - 1, cy, -1, Dir.NEG_Z))
+                    addQuadLeft(quads, ax0, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx + 1, cy, -1, Dir.NEG_Z))
+                    addQuadRight(quads, ax1, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, cy - 1, -1, Dir.NEG_Z))
+                    addQuadTop(quads, ax0, ax1, ay0, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, cy + 1, -1, Dir.NEG_Z))
+                    addQuadBottom(quads, ax0, ax1, ay1, az0, az1, uv.u, uv.v);
+            }
+
+            case POS_Z -> {
+                int cx = key.x;
+                int cy = key.y;
+
+                float ax0 = backMinX + cx * backPx;
+                float ax1 = ax0 + backPx;
+                float ay0 = backMinY + cy * backPy;
                 float ay1 = ay0 + backPy;
+                float az0 = z1 + HEAD_EPS;
+                float az1 = z1 + HEAD_BACK_DEPTH;
 
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        ay0, ay1,
-                        z1, z1 + HEAD_BACK_DEPTH,
-                        56 + u, 8 + v
-                ));
+                addQuadBack(quads, ax0, ax1, ay0, ay1, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx - 1, cy, 8, Dir.POS_Z))
+                    addQuadLeft(quads, ax0, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx + 1, cy, 8, Dir.POS_Z))
+                    addQuadRight(quads, ax1, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, cy - 1, 8, Dir.POS_Z))
+                    addQuadTop(quads, ax0, ax1, ay0, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, cy + 1, 8, Dir.POS_Z))
+                    addQuadBottom(quads, ax0, ax1, ay1, az0, az1, uv.u, uv.v);
             }
-        }
 
-        // LEFT: uv 32,8
-        for (int v = 0; v < 8; v++) {
-            for (int u = 0; u < 8; u++) {
-                if (!opaque(skin, 32 + u, 8 + v)) continue;
+            case NEG_X -> {
+                int cy = key.y;
+                int cz = key.z;
 
-                float az0 = z1 - (u + 1) * pz;
-                float az1 = z1 - u * pz;
-                float ay0 = y0 - HEAD_SIDE_UP + v * py;
-                float ay1 = ay0 + py;
+                float ax0 = x0 - HEAD_SIDE_DEPTH;
+                float ax1 = x0 - HEAD_EPS;
+                float ay0 = sideMinY + cy * sidePy;
+                float ay1 = ay0 + sidePy;
+                float az0 = sideMinZ + cz * sidePz;
+                float az1 = az0 + sidePz;
 
-                boxes.add(new HeadBox(
-                        x0 - HEAD_SIDE_DEPTH, x0,
-                        ay0, ay1,
-                        az0, az1,
-                        32 + u, 8 + v
-                ));
+                addQuadLeft(quads, ax0, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, -1, cy, cz - 1, Dir.NEG_X))
+                    addQuadFront(quads, ax0, ax1, ay0, ay1, az0, uv.u, uv.v);
+
+                if (!hasFace(shell, -1, cy, cz + 1, Dir.NEG_X))
+                    addQuadBack(quads, ax0, ax1, ay0, ay1, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, -1, cy - 1, cz, Dir.NEG_X))
+                    addQuadTop(quads, ax0, ax1, ay0, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, -1, cy + 1, cz, Dir.NEG_X))
+                    addQuadBottom(quads, ax0, ax1, ay1, az0, az1, uv.u, uv.v);
             }
-        }
 
-        // RIGHT: uv 48,8
-        for (int v = 0; v < 8; v++) {
-            for (int u = 0; u < 8; u++) {
-                if (!opaque(skin, 48 + u, 8 + v)) continue;
+            case POS_X -> {
+                int cy = key.y;
+                int cz = key.z;
 
-                float az0 = z0 + u * pz;
-                float az1 = az0 + pz;
-                float ay0 = y0 - HEAD_SIDE_UP + v * py;
-                float ay1 = ay0 + py;
+                float ax0 = x1 + HEAD_EPS;
+                float ax1 = x1 + HEAD_SIDE_DEPTH;
+                float ay0 = sideMinY + cy * sidePy;
+                float ay1 = ay0 + sidePy;
+                float az0 = sideMinZ + cz * sidePz;
+                float az1 = az0 + sidePz;
 
-                boxes.add(new HeadBox(
-                        x1, x1 + HEAD_SIDE_DEPTH,
-                        ay0, ay1,
-                        az0, az1,
-                        48 + u, 8 + v
-                ));
+                addQuadRight(quads, ax1, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, 8, cy, cz - 1, Dir.POS_X))
+                    addQuadFront(quads, ax0, ax1, ay0, ay1, az0, uv.u, uv.v);
+
+                if (!hasFace(shell, 8, cy, cz + 1, Dir.POS_X))
+                    addQuadBack(quads, ax0, ax1, ay0, ay1, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, 8, cy - 1, cz, Dir.POS_X))
+                    addQuadTop(quads, ax0, ax1, ay0, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, 8, cy + 1, cz, Dir.POS_X))
+                    addQuadBottom(quads, ax0, ax1, ay1, az0, az1, uv.u, uv.v);
             }
-        }
 
-        float topMinX = x0 - HEAD_SIDE_DEPTH - HEAD_TOP_WIDTH_EXTRA;
-        float topMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_TOP_WIDTH_EXTRA;
+            case NEG_Y -> {
+                int cx = key.x;
+                int cz = key.z;
 
-        float topMinZ = z0 - HEAD_FRONT_DEPTH - HEAD_TOP_DEPTH_EXTRA;
-        float topMaxZ = z1 + HEAD_BACK_DEPTH + HEAD_TOP_DEPTH_EXTRA;
-
-        float topPx = (topMaxX - topMinX) / 8.0f;
-        float topPz = (topMaxZ - topMinZ) / 8.0f;
-
-// TOP: uv 40,0
-        for (int v = 0; v < 8; v++) {
-            for (int u = 0; u < 8; u++) {
-                if (!opaque(skin, 40 + u, v)) continue;
-
-                float ax0 = topMinX + u * topPx;
+                float ax0 = outerMinX + cx * topPx;
                 float ax1 = ax0 + topPx;
-                float az0 = topMaxZ - (v + 1) * topPz;
-                float az1 = topMaxZ - v * topPz;
+                float ay0 = y0 - HEAD_TOP_DEPTH;
+                float ay1 = y0 - HEAD_EPS;
+                float az0 = outerMinZ + cz * topPz;
+                float az1 = az0 + topPz;
 
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        y0 - HEAD_TOP_DEPTH, y0,
-                        az0, az1,
-                        40 + u, v
-                ));
+                addQuadTop(quads, ax0, ax1, ay0, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx - 1, -1, cz, Dir.NEG_Y))
+                    addQuadLeft(quads, ax0, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx + 1, -1, cz, Dir.NEG_Y))
+                    addQuadRight(quads, ax1, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, -1, cz - 1, Dir.NEG_Y))
+                    addQuadFront(quads, ax0, ax1, ay0, ay1, az0, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, -1, cz + 1, Dir.NEG_Y))
+                    addQuadBack(quads, ax0, ax1, ay0, ay1, az1, uv.u, uv.v);
+            }
+
+            case POS_Y -> {
+                int cx = key.x;
+                int cz = key.z;
+
+                float ax0 = outerMinX + cx * topPx;
+                float ax1 = ax0 + topPx;
+                float ay0 = y1 + HEAD_EPS;
+                float ay1 = y1 + HEAD_BOTTOM_DEPTH;
+                float az0 = outerMinZ + cz * topPz;
+                float az1 = az0 + topPz;
+
+                addQuadBottom(quads, ax0, ax1, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx - 1, 8, cz, Dir.POS_Y))
+                    addQuadLeft(quads, ax0, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx + 1, 8, cz, Dir.POS_Y))
+                    addQuadRight(quads, ax1, ay0, ay1, az0, az1, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, 8, cz - 1, Dir.POS_Y))
+                    addQuadFront(quads, ax0, ax1, ay0, ay1, az0, uv.u, uv.v);
+
+                if (!hasFace(shell, cx, 8, cz + 1, Dir.POS_Y))
+                    addQuadBack(quads, ax0, ax1, ay0, ay1, az1, uv.u, uv.v);
             }
         }
-
-        // BOTTOM: uv 48,0
-        for (int v = 0; v < 8; v++) {
-            for (int u = 0; u < 8; u++) {
-                if (!opaque(skin, 48 + u, v)) continue;
-
-                float ax0 = x0 + u * px;
-                float ax1 = ax0 + px;
-                float az0 = z0 + v * pz;
-                float az1 = az0 + pz;
-
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        y1, y1 + HEAD_BOTTOM_DEPTH,
-                        az0, az1,
-                        48 + u, v
-                ));
-            }
-        }
-
-        addHeadSeamBridges(boxes, skin, x0, x1, y0, y1, z0, z1, px, py, pz);
-
-        List<BakedQuad3D> quads = new ArrayList<>(boxes.size() * 4);
-
-        for (int i = 0; i < boxes.size(); i++) {
-            HeadBox box = boxes.get(i);
-
-            if (!coveredByNeighbor(boxes, i, FaceDir.NEG_Z)) {
-                addQuadFront(quads, box.minX, box.maxX, box.minY, box.maxY, box.minZ, box.u, box.v);
-            }
-            if (!coveredByNeighbor(boxes, i, FaceDir.POS_Z)) {
-                addQuadBack(quads, box.minX, box.maxX, box.minY, box.maxY, box.maxZ, box.u, box.v);
-            }
-            if (!coveredByNeighbor(boxes, i, FaceDir.NEG_X)) {
-                addQuadLeft(quads, box.minX, box.minY, box.maxY, box.minZ, box.maxZ, box.u, box.v);
-            }
-            if (!coveredByNeighbor(boxes, i, FaceDir.POS_X)) {
-                addQuadRight(quads, box.maxX, box.minY, box.maxY, box.minZ, box.maxZ, box.u, box.v);
-            }
-            if (!coveredByNeighbor(boxes, i, FaceDir.NEG_Y)) {
-                addQuadTop(quads, box.minX, box.maxX, box.minY, box.minZ, box.maxZ, box.u, box.v);
-            }
-            if (!coveredByNeighbor(boxes, i, FaceDir.POS_Y)) {
-                addQuadBottom(quads, box.minX, box.maxX, box.maxY, box.minZ, box.maxZ, box.u, box.v);
-            }
-        }
-
-        return new PartMesh(quads);
     }
 
-    private static void addHeadSeamBridges(List<HeadBox> boxes, NativeImage skin,
-                                           float x0, float x1, float y0, float y1, float z0, float z1,
-                                           float px, float py, float pz) {
+    private static void emitHeadSeamStrips(List<BakedQuad3D> quads,
+                                           Map<CellKey, ShellCell> shell,
+                                           PartDefinition part) {
 
-        // FRONT <-> LEFT
+        float x0 = part.minX;
+        float x1 = part.maxX();
+        float y0 = part.minY;
+        float y1 = part.maxY();
+        float z0 = part.minZ;
+        float z1 = part.maxZ();
+
+        float frontMinY = y0 - HEAD_FRONT_UP - HEAD_FRONT_HEIGHT_EXTRA - HEAD_FRONT_VERTICAL_EXTRA;
+        float frontMaxY = y1 + HEAD_FRONT_DOWN + HEAD_FRONT_HEIGHT_EXTRA + HEAD_FRONT_VERTICAL_EXTRA;
+        float frontPy = (frontMaxY - frontMinY) / 8.0f;
+
+        float outerMinX = x0 - HEAD_SIDE_DEPTH - HEAD_FRONT_WIDTH_EXTRA;
+        float outerMaxX = x1 + HEAD_SIDE_DEPTH + HEAD_FRONT_WIDTH_EXTRA;
+        float outerMinZ = z0 - HEAD_FRONT_DEPTH;
+        float outerMaxZ = z1 + HEAD_BACK_DEPTH;
+
+        float outerPx = (outerMaxX - outerMinX) / 8.0f;
+        float outerPz = (outerMaxZ - outerMinZ) / 8.0f;
+
+        // -------------------------------------------------
+        // Vertical corner seams
+        // -------------------------------------------------
+
         for (int row = 0; row < 8; row++) {
-            if (opaque(skin, 40, 8 + row) && opaque(skin, 32 + 7, 8 + row)) {
-                float ay0 = y0 - Math.max(HEAD_FRONT_UP, HEAD_SIDE_UP) + row * py;
-                float ay1 = ay0 + py;
-                boxes.add(new HeadBox(
-                        x0 - HEAD_SIDE_DEPTH, x0,
-                        ay0, ay1,
-                        z0 - HEAD_FRONT_DEPTH, z0,
-                        40, 8 + row
-                ));
+            float ay0 = frontMinY + row * frontPy;
+            float ay1 = ay0 + frontPy;
+
+            // FRONT-LEFT
+            if (hasFace(shell, 0, row, -1, Dir.NEG_Z) && hasFace(shell, -1, row, 0, Dir.NEG_X)) {
+                boolean topOpen = (row == 0)
+                        ? !hasCornerFTL(shell)
+                        : !(hasFace(shell, 0, row - 1, -1, Dir.NEG_Z) && hasFace(shell, -1, row - 1, 0, Dir.NEG_X));
+
+                boolean bottomOpen = (row == 7)
+                        ? !hasCornerFBL(shell)
+                        : !(hasFace(shell, 0, row + 1, -1, Dir.NEG_Z) && hasFace(shell, -1, row + 1, 0, Dir.NEG_X));
+
+                addSeamBoxFrontLeft(quads, ay0, ay1, topOpen, bottomOpen);
+            }
+
+            // FRONT-RIGHT
+            if (hasFace(shell, 7, row, -1, Dir.NEG_Z) && hasFace(shell, 8, row, 0, Dir.POS_X)) {
+                boolean topOpen = (row == 0)
+                        ? !hasCornerFTR(shell)
+                        : !(hasFace(shell, 7, row - 1, -1, Dir.NEG_Z) && hasFace(shell, 8, row - 1, 0, Dir.POS_X));
+
+                boolean bottomOpen = (row == 7)
+                        ? !hasCornerFBR(shell)
+                        : !(hasFace(shell, 7, row + 1, -1, Dir.NEG_Z) && hasFace(shell, 8, row + 1, 0, Dir.POS_X));
+
+                addSeamBoxFrontRight(quads, ay0, ay1, topOpen, bottomOpen);
+            }
+
+            // BACK-LEFT
+            if (hasFace(shell, 0, row, 8, Dir.POS_Z) && hasFace(shell, -1, row, 7, Dir.NEG_X)) {
+                boolean topOpen = (row == 0)
+                        ? !hasCornerBTL(shell)
+                        : !(hasFace(shell, 0, row - 1, 8, Dir.POS_Z) && hasFace(shell, -1, row - 1, 7, Dir.NEG_X));
+
+                boolean bottomOpen = (row == 7)
+                        ? !hasCornerBBL(shell)
+                        : !(hasFace(shell, 0, row + 1, 8, Dir.POS_Z) && hasFace(shell, -1, row + 1, 7, Dir.NEG_X));
+
+                addSeamBoxBackLeft(quads, ay0, ay1, topOpen, bottomOpen);
+            }
+
+            // BACK-RIGHT
+            if (hasFace(shell, 7, row, 8, Dir.POS_Z) && hasFace(shell, 8, row, 7, Dir.POS_X)) {
+                boolean topOpen = (row == 0)
+                        ? !hasCornerBTR(shell)
+                        : !(hasFace(shell, 7, row - 1, 8, Dir.POS_Z) && hasFace(shell, 8, row - 1, 7, Dir.POS_X));
+
+                boolean bottomOpen = (row == 7)
+                        ? !hasCornerBBR(shell)
+                        : !(hasFace(shell, 7, row + 1, 8, Dir.POS_Z) && hasFace(shell, 8, row + 1, 7, Dir.POS_X));
+
+                addSeamBoxBackRight(quads, ay0, ay1, topOpen, bottomOpen);
             }
         }
 
-        // FRONT <-> RIGHT
-        for (int row = 0; row < 8; row++) {
-            if (opaque(skin, 40 + 7, 8 + row) && opaque(skin, 48, 8 + row)) {
-                float ay0 = y0 - Math.max(HEAD_FRONT_UP, HEAD_SIDE_UP) + row * py;
-                float ay1 = ay0 + py;
-                boxes.add(new HeadBox(
-                        x1, x1 + HEAD_SIDE_DEPTH,
-                        ay0, ay1,
-                        z0 - HEAD_FRONT_DEPTH, z0,
-                        47, 8 + row
-                ));
-            }
-        }
+        // -------------------------------------------------
+        // Top / bottom seams running left-right
+        // -------------------------------------------------
 
-        // BACK <-> LEFT
-        for (int row = 0; row < 8; row++) {
-            if (opaque(skin, 56 + 7, 8 + row) && opaque(skin, 32, 8 + row)) {
-                float ay0 = y0 - Math.max(HEAD_BACK_UP, HEAD_SIDE_UP) + row * py;
-                float ay1 = ay0 + py;
-                boxes.add(new HeadBox(
-                        x0 - HEAD_SIDE_DEPTH, x0,
-                        ay0, ay1,
-                        z1, z1 + HEAD_BACK_DEPTH,
-                        63, 8 + row
-                ));
-            }
-        }
-
-        // BACK <-> RIGHT
-        for (int row = 0; row < 8; row++) {
-            if (opaque(skin, 56, 8 + row) && opaque(skin, 48 + 7, 8 + row)) {
-                float ay0 = y0 - Math.max(HEAD_BACK_UP, HEAD_SIDE_UP) + row * py;
-                float ay1 = ay0 + py;
-                boxes.add(new HeadBox(
-                        x1, x1 + HEAD_SIDE_DEPTH,
-                        ay0, ay1,
-                        z1, z1 + HEAD_BACK_DEPTH,
-                        56, 8 + row
-                ));
-            }
-        }
-
-        // TOP <-> FRONT
-        for (int col = 0; col < 8; col++) {
-            if (opaque(skin, 40 + col, 7) && opaque(skin, 40 + col, 8)) {
-                float ax0 = x0 + col * px;
-                float ax1 = ax0 + px;
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        y0 - HEAD_TOP_DEPTH, y0,
-                        z0 - HEAD_FRONT_DEPTH, z0,
-                        40 + col, 8
-                ));
-            }
-        }
-
-        // TOP <-> BACK
-        for (int col = 0; col < 8; col++) {
-            if (opaque(skin, 40 + col, 0) && opaque(skin, 56 + (7 - col), 8)) {
-                float ax0 = x0 + col * px;
-                float ax1 = ax0 + px;
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        y0 - HEAD_TOP_DEPTH, y0,
-                        z1, z1 + HEAD_BACK_DEPTH,
-                        40 + col, 0
-                ));
-            }
-        }
-
-        // BOTTOM <-> FRONT
-        for (int col = 0; col < 8; col++) {
-            if (opaque(skin, 48 + col, 0) && opaque(skin, 40 + col, 15)) {
-                float ax0 = x0 + col * px;
-                float ax1 = ax0 + px;
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        y1, y1 + HEAD_BOTTOM_DEPTH,
-                        z0 - HEAD_FRONT_DEPTH, z0,
-                        48 + col, 0
-                ));
-            }
-        }
-
-        // BOTTOM <-> BACK
-        for (int col = 0; col < 8; col++) {
-            if (opaque(skin, 48 + col, 7) && opaque(skin, 56 + (7 - col), 15)) {
-                float ax0 = x0 + col * px;
-                float ax1 = ax0 + px;
-                boxes.add(new HeadBox(
-                        ax0, ax1,
-                        y1, y1 + HEAD_BOTTOM_DEPTH,
-                        z1, z1 + HEAD_BACK_DEPTH,
-                        48 + col, 7
-                ));
-            }
-        }
-
-        // TOP <-> LEFT
         for (int i = 0; i < 8; i++) {
-            if (opaque(skin, 40, i) && opaque(skin, 32 + i, 8)) {
-                float az0 = z1 - (i + 1) * pz;
-                float az1 = z1 - i * pz;
-                boxes.add(new HeadBox(
-                        x0 - HEAD_SIDE_DEPTH, x0,
-                        y0 - HEAD_TOP_DEPTH, y0,
-                        az0, az1,
-                        40, i
-                ));
+            float ax0 = outerMinX + i * outerPx;
+            float ax1 = ax0 + outerPx;
+
+            // TOP-FRONT
+            if (hasFace(shell, i, -1, 0, Dir.NEG_Y) && hasFace(shell, i, 0, -1, Dir.NEG_Z)) {
+                boolean leftOpen = (i == 0)
+                        ? !hasCornerFTL(shell)
+                        : !(hasFace(shell, i - 1, -1, 0, Dir.NEG_Y) && hasFace(shell, i - 1, 0, -1, Dir.NEG_Z));
+
+                boolean rightOpen = (i == 7)
+                        ? !hasCornerFTR(shell)
+                        : !(hasFace(shell, i + 1, -1, 0, Dir.NEG_Y) && hasFace(shell, i + 1, 0, -1, Dir.NEG_Z));
+
+                addSeamBoxTopFront(quads, ax0, ax1, leftOpen, rightOpen);
+            }
+
+            // TOP-BACK
+            if (hasFace(shell, i, -1, 7, Dir.NEG_Y) && hasFace(shell, i, 0, 8, Dir.POS_Z)) {
+                boolean leftOpen = (i == 0)
+                        ? !hasCornerBTL(shell)
+                        : !(hasFace(shell, i - 1, -1, 7, Dir.NEG_Y) && hasFace(shell, i - 1, 0, 8, Dir.POS_Z));
+
+                boolean rightOpen = (i == 7)
+                        ? !hasCornerBTR(shell)
+                        : !(hasFace(shell, i + 1, -1, 7, Dir.NEG_Y) && hasFace(shell, i + 1, 0, 8, Dir.POS_Z));
+
+                addSeamBoxTopBack(quads, ax0, ax1, leftOpen, rightOpen);
+            }
+
+            // BOTTOM-FRONT
+            if (hasFace(shell, i, 8, 0, Dir.POS_Y) && hasFace(shell, i, 7, -1, Dir.NEG_Z)) {
+                boolean leftOpen = (i == 0)
+                        ? !hasCornerFBL(shell)
+                        : !(hasFace(shell, i - 1, 8, 0, Dir.POS_Y) && hasFace(shell, i - 1, 7, -1, Dir.NEG_Z));
+
+                boolean rightOpen = (i == 7)
+                        ? !hasCornerFBR(shell)
+                        : !(hasFace(shell, i + 1, 8, 0, Dir.POS_Y) && hasFace(shell, i + 1, 7, -1, Dir.NEG_Z));
+
+                addSeamBoxBottomFront(quads, ax0, ax1, leftOpen, rightOpen);
+            }
+
+            // BOTTOM-BACK
+            if (hasFace(shell, i, 8, 7, Dir.POS_Y) && hasFace(shell, i, 7, 8, Dir.POS_Z)) {
+                boolean leftOpen = (i == 0)
+                        ? !hasCornerBBL(shell)
+                        : !(hasFace(shell, i - 1, 8, 7, Dir.POS_Y) && hasFace(shell, i - 1, 7, 8, Dir.POS_Z));
+
+                boolean rightOpen = (i == 7)
+                        ? !hasCornerBBR(shell)
+                        : !(hasFace(shell, i + 1, 8, 7, Dir.POS_Y) && hasFace(shell, i + 1, 7, 8, Dir.POS_Z));
+
+                addSeamBoxBottomBack(quads, ax0, ax1, leftOpen, rightOpen);
             }
         }
 
-        // TOP <-> RIGHT
+        // -------------------------------------------------
+        // Top / bottom seams running front-back
+        // -------------------------------------------------
+
         for (int i = 0; i < 8; i++) {
-            if (opaque(skin, 47, i) && opaque(skin, 48 + (7 - i), 8)) {
-                float az0 = z1 - (i + 1) * pz;
-                float az1 = z1 - i * pz;
-                boxes.add(new HeadBox(
-                        x1, x1 + HEAD_SIDE_DEPTH,
-                        y0 - HEAD_TOP_DEPTH, y0,
-                        az0, az1,
-                        47, i
-                ));
+            float az0 = outerMinZ + i * outerPz;
+            float az1 = az0 + outerPz;
+
+            // TOP-LEFT
+            if (hasFace(shell, 0, -1, i, Dir.NEG_Y) && hasFace(shell, -1, 0, i, Dir.NEG_X)) {
+                boolean frontOpen = (i == 0)
+                        ? !hasCornerFTL(shell)
+                        : !(hasFace(shell, 0, -1, i - 1, Dir.NEG_Y) && hasFace(shell, -1, 0, i - 1, Dir.NEG_X));
+
+                boolean backOpen = (i == 7)
+                        ? !hasCornerBTL(shell)
+                        : !(hasFace(shell, 0, -1, i + 1, Dir.NEG_Y) && hasFace(shell, -1, 0, i + 1, Dir.NEG_X));
+
+                addSeamBoxTopLeft(quads, az0, az1, frontOpen, backOpen);
+            }
+
+            // TOP-RIGHT
+            if (hasFace(shell, 7, -1, i, Dir.NEG_Y) && hasFace(shell, 8, 0, i, Dir.POS_X)) {
+                boolean frontOpen = (i == 0)
+                        ? !hasCornerFTR(shell)
+                        : !(hasFace(shell, 7, -1, i - 1, Dir.NEG_Y) && hasFace(shell, 8, 0, i - 1, Dir.POS_X));
+
+                boolean backOpen = (i == 7)
+                        ? !hasCornerBTR(shell)
+                        : !(hasFace(shell, 7, -1, i + 1, Dir.NEG_Y) && hasFace(shell, 8, 0, i + 1, Dir.POS_X));
+
+                addSeamBoxTopRight(quads, az0, az1, frontOpen, backOpen);
+            }
+
+            // BOTTOM-LEFT
+            if (hasFace(shell, 0, 8, i, Dir.POS_Y) && hasFace(shell, -1, 7, i, Dir.NEG_X)) {
+                boolean frontOpen = (i == 0)
+                        ? !hasCornerFBL(shell)
+                        : !(hasFace(shell, 0, 8, i - 1, Dir.POS_Y) && hasFace(shell, -1, 7, i - 1, Dir.NEG_X));
+
+                boolean backOpen = (i == 7)
+                        ? !hasCornerBBL(shell)
+                        : !(hasFace(shell, 0, 8, i + 1, Dir.POS_Y) && hasFace(shell, -1, 7, i + 1, Dir.NEG_X));
+
+                addSeamBoxBottomLeft(quads, az0, az1, frontOpen, backOpen);
+            }
+
+            // BOTTOM-RIGHT
+            if (hasFace(shell, 7, 8, i, Dir.POS_Y) && hasFace(shell, 8, 7, i, Dir.POS_X)) {
+                boolean frontOpen = (i == 0)
+                        ? !hasCornerFBR(shell)
+                        : !(hasFace(shell, 7, 8, i - 1, Dir.POS_Y) && hasFace(shell, 8, 7, i - 1, Dir.POS_X));
+
+                boolean backOpen = (i == 7)
+                        ? !hasCornerBBR(shell)
+                        : !(hasFace(shell, 7, 8, i + 1, Dir.POS_Y) && hasFace(shell, 8, 7, i + 1, Dir.POS_X));
+
+                addSeamBoxBottomRight(quads, az0, az1, frontOpen, backOpen);
             }
         }
+    }
 
-        // BOTTOM <-> LEFT
-        for (int i = 0; i < 8; i++) {
-            if (opaque(skin, 48, i) && opaque(skin, 32 + (7 - i), 15)) {
-                float az0 = z0 + i * pz;
-                float az1 = az0 + pz;
-                boxes.add(new HeadBox(
-                        x0 - HEAD_SIDE_DEPTH, x0,
-                        y1, y1 + HEAD_BOTTOM_DEPTH,
-                        az0, az1,
-                        48, i
-                ));
-            }
+    private static void emitHeadCornerBoxes(List<BakedQuad3D> quads,
+                                            Map<CellKey, ShellCell> shell,
+                                            PartDefinition part) {
+
+        float x0 = part.minX;
+        float x1 = part.maxX();
+        float y0 = part.minY;
+        float y1 = part.maxY();
+        float z0 = part.minZ;
+        float z1 = part.maxZ();
+
+        // FRONT TOP LEFT
+        if (hasCornerFTL(shell)) {
+            addCornerFTL(quads, x0, y0, z0);
         }
 
-        // BOTTOM <-> RIGHT
-        for (int i = 0; i < 8; i++) {
-            if (opaque(skin, 55, i) && opaque(skin, 48 + i, 15)) {
-                float az0 = z0 + i * pz;
-                float az1 = az0 + pz;
-                boxes.add(new HeadBox(
-                        x1, x1 + HEAD_SIDE_DEPTH,
-                        y1, y1 + HEAD_BOTTOM_DEPTH,
-                        az0, az1,
-                        55, i
-                ));
-            }
+        // FRONT TOP RIGHT
+        if (hasCornerFTR(shell)) {
+            addCornerFTR(quads, x1, y0, z0);
+        }
+
+        // FRONT BOTTOM LEFT
+        if (hasCornerFBL(shell)) {
+            addCornerFBL(quads, x0, y1, z0);
+        }
+
+        // FRONT BOTTOM RIGHT
+        if (hasCornerFBR(shell)) {
+            addCornerFBR(quads, x1, y1, z0);
+        }
+
+        // BACK TOP LEFT
+        if (hasCornerBTL(shell)) {
+            addCornerBTL(quads, x0, y0, z1);
+        }
+
+        // BACK TOP RIGHT
+        if (hasCornerBTR(shell)) {
+            addCornerBTR(quads, x1, y0, z1);
+        }
+
+        // BACK BOTTOM LEFT
+        if (hasCornerBBL(shell)) {
+            addCornerBBL(quads, x0, y1, z1);
+        }
+
+        // BACK BOTTOM RIGHT
+        if (hasCornerBBR(shell)) {
+            addCornerBBR(quads, x1, y1, z1);
         }
     }
 
-    private enum FaceDir {
-        NEG_X, POS_X,
-        NEG_Y, POS_Y,
-        NEG_Z, POS_Z
+    private static void addCornerFTL(List<BakedQuad3D> quads, float x0, float y0, float z0) {
+        float xMin = x0 - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float xMax = x0 - HEAD_EPS;
+        float yMin = y0 - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float yMax = y0 - HEAD_EPS;
+        float zMin = z0 - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float zMax = z0 - HEAD_EPS;
+
+        addQuadFront(quads, xMin, xMax, yMin, yMax, zMin, 40, 8);
+        addQuadLeft(quads, xMin, yMin, yMax, zMin, zMax, 39, 8);
+        addQuadTop(quads, xMin, xMax, yMin, zMin, zMax, 40, 0);
     }
 
-    private static boolean coveredByNeighbor(List<HeadBox> boxes, int selfIndex, FaceDir dir) {
-        HeadBox a = boxes.get(selfIndex);
+    private static void addCornerFTR(List<BakedQuad3D> quads, float x1, float y0, float z0) {
+        float xMin = x1 + HEAD_EPS;
+        float xMax = x1 + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float yMin = y0 - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float yMax = y0 - HEAD_EPS;
+        float zMin = z0 - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float zMax = z0 - HEAD_EPS;
 
-        for (int i = 0; i < boxes.size(); i++) {
-            if (i == selfIndex) continue;
-            HeadBox b = boxes.get(i);
-
-            switch (dir) {
-                case NEG_X -> {
-                    if (Math.abs(b.maxX - a.minX) < EPS &&
-                            overlaps(b.minY, b.maxY, a.minY, a.maxY) &&
-                            overlaps(b.minZ, b.maxZ, a.minZ, a.maxZ)) {
-                        return true;
-                    }
-                }
-                case POS_X -> {
-                    if (Math.abs(b.minX - a.maxX) < EPS &&
-                            overlaps(b.minY, b.maxY, a.minY, a.maxY) &&
-                            overlaps(b.minZ, b.maxZ, a.minZ, a.maxZ)) {
-                        return true;
-                    }
-                }
-                case NEG_Y -> {
-                    if (Math.abs(b.maxY - a.minY) < EPS &&
-                            overlaps(b.minX, b.maxX, a.minX, a.maxX) &&
-                            overlaps(b.minZ, b.maxZ, a.minZ, a.maxZ)) {
-                        return true;
-                    }
-                }
-                case POS_Y -> {
-                    if (Math.abs(b.minY - a.maxY) < EPS &&
-                            overlaps(b.minX, b.maxX, a.minX, a.maxX) &&
-                            overlaps(b.minZ, b.maxZ, a.minZ, a.maxZ)) {
-                        return true;
-                    }
-                }
-                case NEG_Z -> {
-                    if (Math.abs(b.maxZ - a.minZ) < EPS &&
-                            overlaps(b.minX, b.maxX, a.minX, a.maxX) &&
-                            overlaps(b.minY, b.maxY, a.minY, a.maxY)) {
-                        return true;
-                    }
-                }
-                case POS_Z -> {
-                    if (Math.abs(b.minZ - a.maxZ) < EPS &&
-                            overlaps(b.minX, b.maxX, a.minX, a.maxX) &&
-                            overlaps(b.minY, b.maxY, a.minY, a.maxY)) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
+        addQuadFront(quads, xMin, xMax, yMin, yMax, zMin, 47, 8);
+        addQuadRight(quads, xMax, yMin, yMax, zMin, zMax, 48, 8);
+        addQuadTop(quads, xMin, xMax, yMin, zMin, zMax, 47, 0);
     }
 
-    private static boolean overlaps(float a0, float a1, float b0, float b1) {
-        return Math.min(a1, b1) - Math.max(a0, b0) > EPS;
+    private static void addCornerFBL(List<BakedQuad3D> quads, float x0, float y1, float z0) {
+        float xMin = x0 - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float xMax = x0 - HEAD_EPS;
+        float yMin = y1 + HEAD_EPS;
+        float yMax = y1 + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+        float zMin = z0 - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float zMax = z0 - HEAD_EPS;
+
+        addQuadFront(quads, xMin, xMax, yMin, yMax, zMin, 40, 15);
+        addQuadLeft(quads, xMin, yMin, yMax, zMin, zMax, 32, 15);
+        addQuadBottom(quads, xMin, xMax, yMax, zMin, zMax, 48, 0);
     }
 
-    private static final class HeadBox {
-        final float minX, maxX;
-        final float minY, maxY;
-        final float minZ, maxZ;
-        final int u, v;
+    private static void addCornerFBR(List<BakedQuad3D> quads, float x1, float y1, float z0) {
+        float xMin = x1 + HEAD_EPS;
+        float xMax = x1 + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float yMin = y1 + HEAD_EPS;
+        float yMax = y1 + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+        float zMin = z0 - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float zMax = z0 - HEAD_EPS;
 
-        HeadBox(float minX, float maxX,
-                float minY, float maxY,
-                float minZ, float maxZ,
-                int u, int v) {
-            this.minX = minX;
-            this.maxX = maxX;
-            this.minY = minY;
-            this.maxY = maxY;
-            this.minZ = minZ;
-            this.maxZ = maxZ;
-            this.u = u;
-            this.v = v;
-        }
+        addQuadFront(quads, xMin, xMax, yMin, yMax, zMin, 47, 15);
+        addQuadRight(quads, xMax, yMin, yMax, zMin, zMax, 48, 15);
+        addQuadBottom(quads, xMin, xMax, yMax, zMin, zMax, 55, 0);
     }
+
+    private static void addCornerBTL(List<BakedQuad3D> quads, float x0, float y0, float z1) {
+        float xMin = x0 - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float xMax = x0 - HEAD_EPS;
+        float yMin = y0 - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float yMax = y0 - HEAD_EPS;
+        float zMin = z1 + HEAD_EPS;
+        float zMax = z1 + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBack(quads, xMin, xMax, yMin, yMax, zMax, 63, 8);
+        addQuadLeft(quads, xMin, yMin, yMax, zMin, zMax, 32, 8);
+        addQuadTop(quads, xMin, xMax, yMin, zMin, zMax, 40, 0);
+    }
+
+    private static void addCornerBTR(List<BakedQuad3D> quads, float x1, float y0, float z1) {
+        float xMin = x1 + HEAD_EPS;
+        float xMax = x1 + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float yMin = y0 - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float yMax = y0 - HEAD_EPS;
+        float zMin = z1 + HEAD_EPS;
+        float zMax = z1 + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBack(quads, xMin, xMax, yMin, yMax, zMax, 56, 8);
+        addQuadRight(quads, xMax, yMin, yMax, zMin, zMax, 55, 8);
+        addQuadTop(quads, xMin, xMax, yMin, zMin, zMax, 47, 0);
+    }
+
+    private static void addCornerBBL(List<BakedQuad3D> quads, float x0, float y1, float z1) {
+        float xMin = x0 - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float xMax = x0 - HEAD_EPS;
+        float yMin = y1 + HEAD_EPS;
+        float yMax = y1 + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+        float zMin = z1 + HEAD_EPS;
+        float zMax = z1 + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBack(quads, xMin, xMax, yMin, yMax, zMax, 63, 15);
+        addQuadLeft(quads, xMin, yMin, yMax, zMin, zMax, 32, 15);
+        addQuadBottom(quads, xMin, xMax, yMax, zMin, zMax, 48, 7);
+    }
+
+    private static void addCornerBBR(List<BakedQuad3D> quads, float x1, float y1, float z1) {
+        float xMin = x1 + HEAD_EPS;
+        float xMax = x1 + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float yMin = y1 + HEAD_EPS;
+        float yMax = y1 + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+        float zMin = z1 + HEAD_EPS;
+        float zMax = z1 + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBack(quads, xMin, xMax, yMin, yMax, zMax, 56, 15);
+        addQuadRight(quads, xMax, yMin, yMax, zMin, zMax, 48, 15);
+        addQuadBottom(quads, xMin, xMax, yMax, zMin, zMax, 55, 7);
+    }
+
+    private static void addSeamBoxFrontLeft(List<BakedQuad3D> quads, float y0s, float y1s, boolean topOpen, boolean bottomOpen) {
+        float x0s = PartDefinitions.HEAD.minX - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float x1s = PartDefinitions.HEAD.minX - HEAD_EPS;
+        float z0s = PartDefinitions.HEAD.minZ - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float z1s = PartDefinitions.HEAD.minZ - HEAD_EPS;
+
+        addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 40, 8);
+        addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 32 + 7, 8);
+        if (topOpen) addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 40, 0);
+        if (bottomOpen) addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 48, 0);
+    }
+
+    private static void addSeamBoxFrontRight(List<BakedQuad3D> quads, float y0s, float y1s, boolean topOpen, boolean bottomOpen) {
+        float x0s = PartDefinitions.HEAD.maxX() + HEAD_EPS;
+        float x1s = PartDefinitions.HEAD.maxX() + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float z0s = PartDefinitions.HEAD.minZ - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float z1s = PartDefinitions.HEAD.minZ - HEAD_EPS;
+
+        addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 47, 8);
+        addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 48, 8);
+        if (topOpen) addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 47, 0);
+        if (bottomOpen) addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 55, 0);
+    }
+
+    private static void addSeamBoxBackLeft(List<BakedQuad3D> quads, float y0s, float y1s, boolean topOpen, boolean bottomOpen) {
+        float x0s = PartDefinitions.HEAD.minX - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float x1s = PartDefinitions.HEAD.minX - HEAD_EPS;
+        float z0s = PartDefinitions.HEAD.maxZ() + HEAD_EPS;
+        float z1s = PartDefinitions.HEAD.maxZ() + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 63, 8);
+        addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 32, 8);
+        if (topOpen) addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 40, 0);
+        if (bottomOpen) addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 55, 7);
+    }
+
+    private static void addSeamBoxBackRight(List<BakedQuad3D> quads, float y0s, float y1s, boolean topOpen, boolean bottomOpen) {
+        float x0s = PartDefinitions.HEAD.maxX() + HEAD_EPS;
+        float x1s = PartDefinitions.HEAD.maxX() + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float z0s = PartDefinitions.HEAD.maxZ() + HEAD_EPS;
+        float z1s = PartDefinitions.HEAD.maxZ() + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 56, 8);
+        addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 55, 8);
+        if (topOpen) addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 47, 0);
+        if (bottomOpen) addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 48, 7);
+    }
+
+    private static void addSeamBoxTopFront(List<BakedQuad3D> quads, float x0s, float x1s, boolean leftOpen, boolean rightOpen) {
+        float y0s = PartDefinitions.HEAD.minY - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float y1s = PartDefinitions.HEAD.minY - HEAD_EPS;
+        float z0s = PartDefinitions.HEAD.minZ - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float z1s = PartDefinitions.HEAD.minZ - HEAD_EPS;
+
+        addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 40, 7);
+        addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 40, 8);
+        if (leftOpen) addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 40, 0);
+        if (rightOpen) addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 47, 0);
+    }
+
+    private static void addSeamBoxTopBack(List<BakedQuad3D> quads, float x0s, float x1s, boolean leftOpen, boolean rightOpen) {
+        float y0s = PartDefinitions.HEAD.minY - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float y1s = PartDefinitions.HEAD.minY - HEAD_EPS;
+        float z0s = PartDefinitions.HEAD.maxZ() + HEAD_EPS;
+        float z1s = PartDefinitions.HEAD.maxZ() + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 40, 0);
+        addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 56, 8);
+        if (leftOpen) addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 32, 8);
+        if (rightOpen) addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 55, 8);
+    }
+
+    private static void addSeamBoxBottomFront(List<BakedQuad3D> quads, float x0s, float x1s, boolean leftOpen, boolean rightOpen) {
+        float y0s = PartDefinitions.HEAD.maxY() + HEAD_EPS;
+        float y1s = PartDefinitions.HEAD.maxY() + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+        float z0s = PartDefinitions.HEAD.minZ - HEAD_FRONT_DEPTH - HEAD_SEAM_EPS;
+        float z1s = PartDefinitions.HEAD.minZ - HEAD_EPS;
+
+        addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 48, 0);
+        addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 40, 15);
+        if (leftOpen) addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 48, 0);
+        if (rightOpen) addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 55, 0);
+    }
+
+    private static void addSeamBoxBottomBack(List<BakedQuad3D> quads, float x0s, float x1s, boolean leftOpen, boolean rightOpen) {
+        float y0s = PartDefinitions.HEAD.maxY() + HEAD_EPS;
+        float y1s = PartDefinitions.HEAD.maxY() + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+        float z0s = PartDefinitions.HEAD.maxZ() + HEAD_EPS;
+        float z1s = PartDefinitions.HEAD.maxZ() + HEAD_BACK_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 48, 7);
+        addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 56, 15);
+        if (leftOpen) addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 32, 15);
+        if (rightOpen) addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 48, 15);
+    }
+
+    private static void addSeamBoxTopLeft(List<BakedQuad3D> quads, float z0s, float z1s, boolean frontOpen, boolean backOpen) {
+        float x0s = PartDefinitions.HEAD.minX - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float x1s = PartDefinitions.HEAD.minX - HEAD_EPS;
+        float y0s = PartDefinitions.HEAD.minY - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float y1s = PartDefinitions.HEAD.minY - HEAD_EPS;
+
+        addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 40, 0);
+        addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 32, 8);
+        if (frontOpen) addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 40, 8);
+        if (backOpen) addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 63, 8);
+    }
+
+    private static void addSeamBoxTopRight(List<BakedQuad3D> quads, float z0s, float z1s, boolean frontOpen, boolean backOpen) {
+        float x0s = PartDefinitions.HEAD.maxX() + HEAD_EPS;
+        float x1s = PartDefinitions.HEAD.maxX() + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float y0s = PartDefinitions.HEAD.minY - HEAD_TOP_DEPTH - HEAD_SEAM_EPS;
+        float y1s = PartDefinitions.HEAD.minY - HEAD_EPS;
+
+        addQuadTop(quads, x0s, x1s, y0s, z0s, z1s, 47, 0);
+        addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 48, 8);
+        if (frontOpen) addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 47, 8);
+        if (backOpen) addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 56, 8);
+    }
+
+    private static void addSeamBoxBottomLeft(List<BakedQuad3D> quads, float z0s, float z1s, boolean frontOpen, boolean backOpen) {
+        float x0s = PartDefinitions.HEAD.minX - HEAD_SIDE_DEPTH - HEAD_SEAM_EPS;
+        float x1s = PartDefinitions.HEAD.minX - HEAD_EPS;
+        float y0s = PartDefinitions.HEAD.maxY() + HEAD_EPS;
+        float y1s = PartDefinitions.HEAD.maxY() + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 48, 0);
+        addQuadLeft(quads, x0s, y0s, y1s, z0s, z1s, 32, 15);
+        if (frontOpen) addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 40, 15);
+        if (backOpen) addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 63, 15);
+    }
+
+    private static void addSeamBoxBottomRight(List<BakedQuad3D> quads, float z0s, float z1s, boolean frontOpen, boolean backOpen) {
+        float x0s = PartDefinitions.HEAD.maxX() + HEAD_EPS;
+        float x1s = PartDefinitions.HEAD.maxX() + HEAD_SIDE_DEPTH + HEAD_SEAM_EPS;
+        float y0s = PartDefinitions.HEAD.maxY() + HEAD_EPS;
+        float y1s = PartDefinitions.HEAD.maxY() + HEAD_BOTTOM_DEPTH + HEAD_SEAM_EPS;
+
+        addQuadBottom(quads, x0s, x1s, y1s, z0s, z1s, 55, 0);
+        addQuadRight(quads, x1s, y0s, y1s, z0s, z1s, 48, 15);
+        if (frontOpen) addQuadFront(quads, x0s, x1s, y0s, y1s, z0s, 47, 15);
+        if (backOpen) addQuadBack(quads, x0s, x1s, y0s, y1s, z1s, 56, 15);
+    }
+
+    private static boolean hasCornerFTL(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 0, 0, -1, Dir.NEG_Z)
+                && hasFace(shell, -1, 0, 0, Dir.NEG_X)
+                && hasFace(shell, 0, -1, 0, Dir.NEG_Y);
+    }
+
+    private static boolean hasCornerFTR(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 7, 0, -1, Dir.NEG_Z)
+                && hasFace(shell, 8, 0, 0, Dir.POS_X)
+                && hasFace(shell, 7, -1, 0, Dir.NEG_Y);
+    }
+
+    private static boolean hasCornerFBL(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 0, 7, -1, Dir.NEG_Z)
+                && hasFace(shell, -1, 7, 0, Dir.NEG_X)
+                && hasFace(shell, 0, 8, 0, Dir.POS_Y);
+    }
+
+    private static boolean hasCornerFBR(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 7, 7, -1, Dir.NEG_Z)
+                && hasFace(shell, 8, 7, 0, Dir.POS_X)
+                && hasFace(shell, 7, 8, 0, Dir.POS_Y);
+    }
+
+    private static boolean hasCornerBTL(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 0, 0, 8, Dir.POS_Z)
+                && hasFace(shell, -1, 0, 7, Dir.NEG_X)
+                && hasFace(shell, 0, -1, 7, Dir.NEG_Y);
+    }
+
+    private static boolean hasCornerBTR(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 7, 0, 8, Dir.POS_Z)
+                && hasFace(shell, 8, 0, 7, Dir.POS_X)
+                && hasFace(shell, 7, -1, 7, Dir.NEG_Y);
+    }
+
+    private static boolean hasCornerBBL(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 0, 7, 8, Dir.POS_Z)
+                && hasFace(shell, -1, 7, 7, Dir.NEG_X)
+                && hasFace(shell, 0, 8, 7, Dir.POS_Y);
+    }
+
+    private static boolean hasCornerBBR(Map<CellKey, ShellCell> shell) {
+        return hasFace(shell, 7, 7, 8, Dir.POS_Z)
+                && hasFace(shell, 8, 7, 7, Dir.POS_X)
+                && hasFace(shell, 7, 8, 7, Dir.POS_Y);
+    }
+
+
 
     // =========================================================
     // ORIGINAL IDEA BAKER FOR BODY / ARMS / LEGS
