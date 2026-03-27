@@ -16,8 +16,16 @@ public abstract class FovZeroBypass {
 
     @Shadow @Final private net.minecraft.client.Minecraft minecraft;
 
-    @Inject(method = "getFov", at = @At("HEAD"), cancellable = true)
-    private void cc$zeroBypass(Camera camera, float partialTick, boolean useFovSetting, CallbackInfoReturnable<Double> cir) {
+    @Inject(
+            method = "getFov(Lnet/minecraft/client/Camera;FZ)D",
+            at = @At("HEAD"),
+            cancellable = true,
+            remap = false
+    )
+    private void cc$zeroBypass(Camera camera,
+                               float partialTick,
+                               boolean useFovSetting,
+                               CallbackInfoReturnable<Double> cir) {
         if (!Flags.FOV_ZERO_BYPASS) {
             return;
         }
@@ -27,8 +35,10 @@ public abstract class FovZeroBypass {
         }
 
         Options options = this.minecraft.options;
-        if (((Double) options.fovEffectScale().get()) <= 0.0D) {
-            cir.setReturnValue((double)(Integer) options.fov().get());
+        double scale = ((Double) options.fovEffectScale().get()).doubleValue();
+
+        if (scale <= 0.0D) {
+            cir.setReturnValue((double) (Integer) options.fov().get());
         }
     }
 }

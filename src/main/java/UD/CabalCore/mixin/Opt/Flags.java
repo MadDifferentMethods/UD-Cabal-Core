@@ -23,4 +23,15 @@ public final class Flags {
     public static final boolean DEBUG_GAMEEVENT_NULLER = true;
     public static final boolean DEBUG_BEE_NULLER = true;
     public static final boolean DEBUG_BRAIN_NULLER = true;
+
+    /*
+     * Phase 2
+     */
+    public static final boolean LIGHTMAP_INVALIDATOR = true;
+
+    /*
+     * Phase 3
+     */
+
+    public static final boolean SKY_COLOR_CACHE = true;
 }

@@ -1,4 +1,4 @@
-package UD.CabalCore.mixin.Opt.toast;
+package UD.CabalCore.mixin.Opt.Toast;
 
 import UD.CabalCore.mixin.Opt.Flags;
 import com.mojang.blaze3d.vertex.PoseStack;

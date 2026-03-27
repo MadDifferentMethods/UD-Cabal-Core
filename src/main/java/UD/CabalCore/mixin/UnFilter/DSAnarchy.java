@@ -15,7 +15,6 @@ import javax.annotation.Nullable;
 @Mixin(DedicatedServer.class)
 public abstract class DSAnarchy {
 
-    // 1. Prevent TextFilterClient instantiation (Stops threads/config parsing)
     @Redirect(
             method = "<init>",
             at = @At(
@@ -26,11 +25,5 @@ public abstract class DSAnarchy {
     @Nullable
     private TextFilterClient killFilterClient(String config) {
         return null;
-    }
-
-    // 2. Force filter provider to return NO_FILTER
-    @Inject(method = "createTextFilterForPlayer", at = @At("HEAD"), cancellable = true)
-    private void returnNoFilter(ServerPlayer p_139634_, CallbackInfoReturnable<TextFilter> cir) {
-        cir.setReturnValue(TextFilter.DUMMY);
     }
 }
