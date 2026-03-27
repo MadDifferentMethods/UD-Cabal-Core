@@ -76,7 +76,10 @@
     "ReVision.ZNVS",
     "ReVision.ZWV",
     "ReVision.NetherFC",
-    "ReVision.EndFC"
+    "ReVision.EndFC",
+    "ReVision.BrightOpRemover",
+    "ReVision.AdaExLiTex",
+    "ReVision.EyeUpdateHook"
   ],
   "client": [
   ],

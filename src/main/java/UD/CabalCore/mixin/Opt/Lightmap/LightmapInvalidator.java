@@ -1,5 +1,6 @@
 package UD.CabalCore.mixin.Opt.Lightmap;
 
+import UD.CabalCore.ReVision.EyeAdapt;
 import UD.CabalCore.mixin.Opt.Flags;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -48,6 +49,7 @@ public abstract class LightmapInvalidator {
     @Unique private int cc$lastDarkenWorldAmount;
     @Unique private int cc$lastGamma;
 
+    @Unique private int cc$lastEyeAdaptKey;
     @Unique private int cc$lastBlockLightRedFlicker;
 
     @Unique
@@ -69,6 +71,9 @@ public abstract class LightmapInvalidator {
         if (level == null || this.minecraft.player == null) {
             return;
         }
+
+        // IMPORTANT: update adaptation BEFORE cache comparison
+        int eyeAdaptKey = EyeAdapt.cacheKey();
 
         DimensionType dimensionType = level.dimensionType();
 
@@ -122,7 +127,8 @@ public abstract class LightmapInvalidator {
                 && this.cc$lastWaterVision == qWaterVision
                 && this.cc$lastVisionBoost == qVisionBoost
                 && this.cc$lastDarkenWorldAmount == qDarkenWorldAmount
-                && this.cc$lastGamma == qGamma) {
+                && this.cc$lastGamma == qGamma
+                && this.cc$lastEyeAdaptKey == eyeAdaptKey) {
             this.updateLightTexture = false;
             ci.cancel();
             return;
@@ -148,6 +154,7 @@ public abstract class LightmapInvalidator {
         this.cc$lastDarkenWorldAmount = qDarkenWorldAmount;
         this.cc$lastGamma = qGamma;
 
+        this.cc$lastEyeAdaptKey = eyeAdaptKey;
         this.cc$lastBlockLightRedFlicker = qFlicker;
     }
 }
